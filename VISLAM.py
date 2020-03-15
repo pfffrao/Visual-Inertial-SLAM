@@ -1,22 +1,24 @@
 from utils import load_data, visualize_trajectory_2d
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.linalg as LA
 import sys
+import pdb
 
 
 class VISLAM:
     def __init__(self, filename):
-        self.t, self.feature, self.linVel, self.rotVel, self.K, self.b, self.cam_T_imu = load_data(file_name=filename)
+        self.t, self.fullFeature, self.linVel, self.rotVel, self.K, self.b, self.cam_T_imu = load_data(file_name=filename)
         self.t = self.t[0,:]
-        self.noiseScale = np.array([1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2], np.float32)
-        self.W = np.zeros((6,6), np.float32)
+        self.noiseScale = np.array([1e-3, 1e-3, 1e-3, 1e-3, 1e-3, 1e-3], np.float32)
+        self.W = np.identity(6, np.float32)
         for i in range(6):
             self.W[i,i] = self.noiseScale[i]
         
         # stereo camera calibration matrix M
         self.M = np.zeros((4,4), np.float32)
-        self.M[0:2, 0:3] = self.K[0:2,0:3]
-        self.M[2:4, 0:3] = self.K[0:2,0:3]
+        self.M[0:2, 0:3] = np.copy(self.K[0:2,0:3])
+        self.M[2:4, 0:3] = np.copy(self.K[0:2,0:3])
         self.M[2,3] = -self.K[0,0] * self.b
         print("M:")
         print(self.M)
@@ -30,7 +32,7 @@ class VISLAM:
         self.dpiPrototype = np.zeros((4,4), dtype=np.float32)
         self.dpiPrototype[2,2] = 0.0
 
-
+        self.feature = self.downSample()
         self.validfeatures = {}  # a dictionary for valid features, key is time index and value is a list of feature index.
         self.validFeatureLoaded = False
         self.getValidFeatures()
@@ -39,7 +41,19 @@ class VISLAM:
         self.P[0:3,0:3] = np.identity(3, dtype=np.float32)
         self.V = 1e-2 * np.identity(4, dtype=np.float32)  # observation noise scale
         self.landmark = np.zeros((2, self.feature.shape[1]), dtype=np.float32)
+
+        self.featureN = self.feature.shape[1]
     
+    def downSample(self):
+        # choose 1000 feature with equal interval
+        interval = 3
+        featureN = int(self.fullFeature.shape[1] / interval)
+        print("choose features with interval: " + str(interval))
+        self.feature = np.zeros((4,featureN,len(self.t)))
+        for idx in range(featureN):
+            self.feature[:,idx,:] = self.fullFeature[:, interval*idx, :]
+        return self.feature
+
     def dataSummary(self):
         print("Length of time frames:\t\t" + str(self.t.shape[0]))
         print("A sample dt:\t\t" + str(self.t[10] - self.t[9]))
@@ -52,7 +66,7 @@ class VISLAM:
         print(self.rotVel[:, 10])
 
         print("Length of features:\t\t" + str(self.feature.shape[2]))
-        print("Number of features:\t\t" + str(self.feature.shape[1]))
+        print("Number of features:\t\t" + str(self.featureN))
         print('A sample feature:\t\t')
         print(self.feature[:, 1, 2])
 
@@ -60,6 +74,9 @@ class VISLAM:
         print(self.K)
 
         print("stereo camera baseline:" + str(self.b))
+
+        print("extrinsic matrix:")
+        print(self.cam_T_imu)
 
     def hatMap(self, x):
         # return the hatmap of x
@@ -107,9 +124,11 @@ class VISLAM:
         rhoHat = self.hatMap(rho)
         
         xihat = np.zeros((6,6), np.float32)
-        xihat[0:3, 0:3] = thetaHat
-        xihat[3:6,3:6] = thetaHat
-        xihat[0:3,3:6] = rhoHat
+        xihat[0:3, 0:3] = np.copy(thetaHat)
+        xihat[3:6,3:6] = np.copy(thetaHat)
+        xihat[0:3,3:6] = np.copy(rhoHat)
+        # print("curly Hat:")
+        # print(xihat)
         
         T = np.identity(6, np.float32)
         # DP:
@@ -186,6 +205,16 @@ class VISLAM:
         d = feature[0] - feature[2] 
         ul = feature[0]
         vl = feature[1]
+        # print("TF")
+        # print(TF)
+        # print("d: ")
+        # print(d)
+        # print("cu")
+        # print(cu)
+        # print("cv:")
+        # print(cv)
+        # print("b")
+        # print()
 
         z = fsu * self.b / d
         x = (ul - cu) * z / fsu
@@ -193,27 +222,26 @@ class VISLAM:
 
         # print("transformToG: x:" + str(x) + ", y:" + str(y) + ", z: " + str(z))
         RTranspose = TF[0:3, 0:3].T
-        p = TF[0:3, 3]
+        p = np.add(TF[0:3, 3], self.cam_T_imu[:3,3])
+        # p = TF[0:3, 3]
         p = np.reshape(p, (3,1))
+        # print("transform to G: p is ")
+        # print(p)
 
-        opticalLoc = np.array([x,y,z], np.float32)
+        opticalLoc = np.array([[x],[y],[z],[1]], np.float32)
         # print("optical loc:")
         # print(opticalLoc)
-        theR = np.matmul(self.oRr, RTranspose)
-        theRinv = theR.T
-        # print("theRinv:")
-        # print(theRinv)
-        temp = np.dot(theRinv, opticalLoc)
-        temp = np.reshape(temp, (3,1))
-        # print("temp:")
-        # print(temp)
-        # print("p:")
-        # print(p)
-        m = np.add(p, temp)
-        # m = m[:,0]
-        # print(m)
-        m = np.reshape(m, (3,1))
-        return m
+        # theR = np.matmul(self.oRr, RTranspose)
+        # theRinv = np.linalg.inv(theR)
+        # temp = np.dot(theRinv, opticalLoc)
+        # temp = np.reshape(temp, (3,1))
+        # m = np.add(p, temp)
+        # # m = m[:,0]
+        # # print(m)
+        # m = np.reshape(m, (3,1))
+        IMULoc = np.matmul(np.linalg.inv(self.cam_T_imu), opticalLoc)
+        GlobalCoord = np.matmul(TF, IMULoc)
+        return GlobalCoord
 
     def isValidFeature(self, f):
         # f should be a 4 x 1 vector
@@ -329,7 +357,7 @@ class VISLAM:
                     self.featureLoc[fidx]['cov'] = np.concatenate((self.featureLoc[fidx]['cov'], cov), axis=2)
                 else:
                     print("initializing fidx:\t\t" + str(fidx))
-                    mu = self.transformToG(self.feature[:, fidx, tidx], self.IMUPose[:,:,tidx])
+                    mu = self.transformToG(self.feature[:, fidx, tidx], self.IMUPose[:,:,tidx])[:3]
                     cov = 1e-2 * np.identity(3,np.float32)
                     self.featureLoc[fidx] = {
                         'mu': np.reshape(mu, (3,1)),
@@ -350,16 +378,351 @@ class VISLAM:
 
     def showTrajAndLandMark(self):
         fig, ax = visualize_trajectory_2d(self.IMUPose, landmark=self.landmark)
+    
+
+    def cirDotMap(self, sbar):
+        # sbar should be a (4,1) numpy array
+        theMap = np.zeros((4,6), dtype=np.float32)
+        theMap[0:3,0:3] = np.identity(3)
+        sHat = self.hatMap(sbar[0:3,0])  # input of hatMap should be a (3,) array
+        theMap[0:3, 3:6] = -sHat
+        return theMap
+
+
+    def ObservationModel(self, featureLoc, Ut):
+        # given a feature location in the global frame, calculate the pixel frame coordinate, Ut is the inverse IMU pose transformation matrix
+        
+        homoCoord = np.ones((4,1), dtype=np.float32)
+        # transform featureLoc to 3x1
+        theFeature = np.reshape(featureLoc[:3], (3,1))
+        homoCoord[:3] = theFeature[:3]
+        # print("ObservationModel: Ut")
+        # print(Ut)
+        secondTerm = self.piMap(np.matmul(self.cam_T_imu, np.matmul(Ut, homoCoord)))
+        # print("second Term:")
+        # print(secondTerm)
+        pixel = np.matmul(self.M, secondTerm)
+        pixel = np.reshape(pixel, (4,))
+        return pixel
+
+
+    def observationTest(self):
         
         
-        
+        # IMUPose = np.array([[ 0.00370742,  -0.99999154,  0.00374294,  20.12086741],
+        #                     [ 0.9999861,  -0.00371402,  0.00176665, 5.01624031],
+        #                     [-0.00374947, -0.00175274,  0.9999915,  -0.06109919],
+        #                     [ 0.,          0.,          0.,          1.        ]], dtype=np.float32)
+        IMUPose = np.identity(4,dtype=np.float32)
+        Ut = np.linalg.inv(IMUPose)
+        print("=================== observation test ================")
+        for idx in range(10):
+            theFeature = np.copy(self.feature[:, idx , 0])
+            print("idx: \t" + str(idx))
+            print("The feature is:")
+            print(theFeature)
+            featureInG = self.transformToG(theFeature, IMUPose)  # 3x1
+            featurePix = self.ObservationModel(featureInG, Ut)  # 
+            # againInG = self.transformToG(featurePix, IMUPose)
+            print("feature in Global:")
+            print(featureInG)
+            # print("Second Time in Global:")
+            # print(againInG)
+            # print("Reconstructed pixel:")
+            # print(featurePix)
+            # print("IMUPose:")
+            # print(IMUPose)
+            # print("Inverse IMUPose:")
+            # print(Ut)
+
+            print(IMUPose * Ut)
+            print("Difference: ")
+            print(np.subtract(theFeature, featurePix))
+
+    def curlyHatMap(self, xi):
+        # map a 6x1 vector to a 6x6 hat matrix
+        curH = np.zeros((6,6), dtype=np.float32)
+        wHat = self.hatMap(xi[:3])
+        vHat = self.hatMap(xi[3:6])
+        curH[0:3, 0:3] = wHat
+        curH[3:6, 3:6] = wHat
+        curH[0:3, 3:6] = vHat
+        return curH
+
+    def SE3Hat(self, xi):
+        # xi should be a 6x1 vector
+        rho = np.copy(xi[0:3, 0])
+        theta = np.copy(xi[3:6, 0]) 
+        xihat = np.array([[0.0,       -theta[2],   theta[1],   rho[0]],
+                          [theta[2],  0.0,        -theta[0],   rho[1]],
+                          [-theta[1], theta[0],   0.0,         rho[2]],
+                          [0.0,       0.0,        0.0,         0.0   ]], dtype=np.float32)
+        return xihat
+    def SE3AntiHat(self, aHatMap):
+        theRes = np.zeros((6,1), dtype=np.float32)
+        theRes[0,0] = aHatMap[0,3]
+        theRes[1,0] = aHatMap[1,3]
+        theRes[2,0] = aHatMap[2,3]
+        theRes[3,0] = aHatMap[2,1]
+        theRes[4,0] = aHatMap[0,2]
+        theRes[5,0] = aHatMap[1,0]
+        return theRes
+
+    def cirDotMapTest(self):
+        sbar = np.array([[1],[2],[3],[4]])
+        cirdot = self.cirDotMap(sbar)
+        print("cirdot:")
+        print(cirdot)
+
+    def dpiMapTest(self):
+        pi = np.array([[1],[2],[3],[4]])
+        dpi = self.dpiMap(pi)
+        print("dpiMap result:")
+        print(dpi)
+    
+    def SE3HatTest(self):
+        pi = np.array([[1],[2],[3],[4],[5],[6]])
+        theHat = self.SE3Hat(pi)
+        print("se3Hat result:")
+        print(theHat)
+
+    def jointEKF(self):
+        self.state = np.zeros((3*self.featureN+6,1), dtype=np.float32)
+        self.updCov = np.identity(3*self.featureN+6, dtype=np.float32)
+        self.seen = []
+        jump = 0
+        self.allIMUPose = np.zeros((4,4,1), dtype=np.float32)
+        self.W = 1e-1 * np.identity(6, dtype=np.float32)
+        self.W[3:6,3:6] = 0.05 * np.identity(3, dtype=np.float32)
+        Ut = np.identity(4, dtype=np.float32)
+        for tidx in range(len(self.t)):
+            print("Timestep: " + str(tidx))
+            # prediction
+            if tidx == 0:
+                continue
+            else:
+                dt = self.t[tidx] - self.t[tidx-1]
+                # dt = 0.0
+                xi = np.array([[(self.linVel[0, tidx-1] + self.linVel[0, tidx]) / 2.0],
+                               [(self.linVel[1, tidx-1] + self.linVel[1, tidx]) / 2.0],
+                               [(self.linVel[2, tidx-1] + self.linVel[2, tidx]) / 2.0],
+                               [(self.rotVel[0, tidx-1] + self.rotVel[0, tidx]) / 2.0],
+                               [(self.rotVel[1, tidx-1] + self.rotVel[1, tidx]) / 2.0],
+                               [(self.rotVel[2, tidx-1] + self.rotVel[2, tidx]) / 2.0]], dtype=np.float32)
+                Nt = len(self.validfeatures[tidx])  # features observed in this step
+                # Nt = 1
+                # inverse IMU pose
+                xi = -dt * xi
+                print("xi:")
+                print(xi)
+                # prevState = np.copy(self.state[:6])
+                # newState = np.add(prevState, xi)
+                
+                xiHat = self.SE3Hat(xi)
+                dUt = LA.expm(xiHat)
+                Ut = np.matmul(dUt, Ut)
+
+                # newHat = LA.logm(Ut)
+                # self.state[:6] = self.SE3AntiHat(newHat)
+                # stateXi = self.SE3Hat(np.copy(self.state[:6]))
+                # stateIMUPose = LA.inv(LA.expm(stateXi))
+                # print("Ut:")
+                # print(Ut)
+                # print("StateIMUPose:")
+                # print(stateIMUPose)
+
+                # current inverse IMU pose
+                # Ut = LA.expm(xiHat)
+
+                # current forward IMU pose
+                IMUPose = LA.inv(Ut)
+                self.allIMUPose = np.concatenate((self.allIMUPose, np.reshape(IMUPose, (4,4,1))), axis=2)
+                print("IMUPose:")
+                print(IMUPose)
+
+                # prediction covariance
+                lastCov = np.copy(self.updCov[:6,:6])
+                # cov = self.adjSE3Rodrigues(xi)
+                curlyHat = self.curlyHatMap(xi)
+                # print("Curly Hat:")
+                # print(curlyHat)
+                cov = LA.expm(curlyHat)
+                motionCov = np.matmul(cov, np.matmul(lastCov, cov.T))
+                # print("Motion cov:")
+                # print(motionCov)
+
+                predCov = np.copy(self.updCov)
+                predCov[:6,:6] = np.add(np.copy(motionCov), np.copy(self.W))
+                # ============== update ======================
+                Hxi = np.zeros((4*Nt,6), dtype=np.float32)
+                Hm = np.zeros((4*Nt, 3*self.featureN), dtype=np.float32)
+
+                oTi = self.cam_T_imu
+                coeff = np.matmul(oTi, Ut)
+
+                # observed feature pixel loc
+                Z = np.zeros((4*Nt,1), dtype=np.float32)
+                # predicted feature pixel loc
+                predZ = np.copy(Z)
+
+                for idx in range(Nt):
+                    # calculate Hxi[4*fidx:(4*fidx+4),0:6]
+                    fidx = self.validfeatures[tidx][idx]
+                    observed = np.copy(self.feature[:, fidx, tidx])
+                    observed[3] = observed[1]
+                    Z[4*idx:(4*idx+4), 0] = observed
+                    startIdx = 6+fidx*3
+                    # if no previous observations, use current one as previous
+                    if self.state[startIdx, 0] == 0.0:
+                        # print("initializing feature " + str(fidx))
+                        self.seen.append(fidx)
+                        featureInG = self.transformToG(observed, IMUPose)[:3]
+                        self.state[startIdx:startIdx+3] = featureInG
+                        # predCov[6+fidx*3:9+fidx*3, 6+fidx*3:9+fidx*3] = np.identity(3, dtype=np.float32)
+                        print("feature observed in G:")
+                        print(featureInG)
+
+                    prevFeatureLoc = np.copy(self.state[startIdx:startIdx+3])
+                    # ===== Hxi =====
+                    prevFeatureLocBar = np.ones((4,1), dtype=np.float32)
+                    prevFeatureLocBar[0:3] = prevFeatureLoc
+                    
+                    piTerm = np.matmul(coeff, prevFeatureLocBar)
+                    dpidq = self.dpiMap(piTerm)
+                    firstTerm = np.matmul(np.matmul(self.M, dpidq), oTi)
+                    # dpidq = self.dpiMap(np.matmul(coeff, prevFeatureLocBar))
+                    lastTerm = np.copy(self.cirDotMap(np.matmul(Ut, prevFeatureLocBar)))
+                    Hi = np.matmul(firstTerm, lastTerm)
+                    Hxi[4*idx:(4*idx+4),:] = Hi
+                    # print(Hi)
+
+                    # calculate Hm
+                    lastTerm = np.matmul(Ut, self.P.T)
+                    Htij = np.matmul(firstTerm, lastTerm)
+                    Hm[4*idx:4*idx+4, 3*fidx:3*fidx+3] = Htij
+
+                    # update predicted Z according to previous
+                    predZ[4*idx:(4*idx+4),0] = self.ObservationModel(prevFeatureLoc, Ut)
+                    # predZ[4*idx:(4*idx+4)] = np.matmul(self.M, self.piMap(piTerm))
+                
+                print("feature Jacobian complete.")
+                innovation = np.subtract(Z, predZ)
+                # print("Z:")
+                # print(Z)
+                # print("predZ:")
+                # print(predZ)
+                print("Max innovation")
+                print(np.amax(innovation))
+                print("min innvoation:")
+                print(np.amin(innovation))
+
+                theH = np.concatenate((Hxi, Hm), axis=1)  # 4Nt x (3Nt+6)
+                V = np.identity(4*Nt, dtype=np.float32)
+                
+                # alternative way to derive K
+                K = np.matmul(predCov, theH.T)
+                lastTerm = np.matmul(theH, np.matmul(predCov, theH.T))
+                lastTerm = np.add(lastTerm, V)
+                scaler = np.amax(lastTerm)
+                lastTerm = np.divide(lastTerm, scaler)
+                theInv = np.identity(4*Nt, dtype=np.float32)
+                if np.linalg.cond(lastTerm) < 1/sys.float_info.epsilon:
+                    try:
+                        theInv = np.linalg.inv(lastTerm)
+                    except Exception as e:
+                        jump = jump + 1
+                        continue
+                else:
+                    print("Singular lastTerm found.")
+                    jump = jump + 1
+                    print(lastTerm)
+                    continue
+                K = np.matmul(K, theInv)
+                K = np.divide(K, scaler)
+
+                # S = np.matmul(theH, np.matmul(predCov, theH.T))  # 4Nt x 4Nt
+                # S = np.add(S, V)
+                # C = np.matmul(predCov, theH.T)  # 3Nt+6 x 4Nt -> 3M+6 x 4Nt
+                # Sinv = np.identity(4*Nt,dtype=np.float32)
+                # if np.linalg.cond(S) < 1/sys.float_info.epsilon:
+                #     try:
+                #         Sinv = np.linalg.inv(S)
+                #     except Exception as e:
+                #         jump = jump + 1
+                #         continue
+                # else:
+                #     print("Singular S found.")
+                #     jump = jump + 1
+                #     print(S)
+                #     continue
+                # K = np.matmul(C, Sinv)  # -> 3M+6 x 4Nt
+                print()
+                print("Kalman Max:")
+                print(np.amax(K))
+                print("Kalman Min:")
+                print(np.amin(K))
+                
+
+                delta = np.matmul(K, innovation)
+                print("Delta[:6]")
+                print(delta[:6])
+                print("max Delta")
+                print(np.amax(delta))
+                print("min Delta")
+                print(np.amin(delta))
+                delta = np.reshape(delta, (3*self.featureN+6,1))
+  
+                predMu = np.copy(self.state)
+                updateMu = np.add(predMu, delta)  # 3M+6 x 1
+
+                # print(updateMu)
+                # index variables to help extract 3Nt+6 x 3Nt submatrix from all 1000+ features
+                # rowIdx = np.zeros((3*Nt+6,1), dtype=np.int16)
+                # colIdx = np.zeros((1, 3*Nt+6), dtype=np.int16)
+                # rowIdx[:6,0] = range(6)
+                # colIdx[0,:6] = range(6)
+                
+                # for idx in range(Nt):
+                #     # calculate Hxi[4*fidx:(4*fidx+4),0:6]
+                #     fidx = self.validfeatures[tidx][idx] 
+                #     startIdx = fidx*3 + 6
+                #     rowStart = 3*idx + 6
+                #     rowIdx[rowStart:(rowStart+3), 0] = range(startIdx,startIdx+3)
+                #     colIdx[0, rowStart:(rowStart+3)] = range(startIdx,startIdx+3)
+                
+                updateCov = np.subtract(np.identity(3*self.featureN+6, dtype=np.float32), np.matmul(K, theH))
+                updateCov = np.matmul(updateCov, predCov)
+                #np.subtract(predCov, np.matmul(K, np.matmul(S, K.T)))  # 3M+6 x 3M+6
+                # update the state variable
+                
+                Ut = np.matmul(LA.expm(self.SE3Hat(delta[:6])), Ut)
+                self.state = updateMu
+                self.updCov = updateCov
+                print("update covariance:")
+                print(self.updCov)
+                if tidx % 300 == 0:
+                    print("jumped " + str(jump) + " time steps!")
+                    self.landmark = np.reshape(self.state[6:], (3, self.featureN), order='F')
+                    print(self.landmark)
+                    fig, ax = visualize_trajectory_2d(self.allIMUPose, landmark=self.landmark)
+                    
+        print("jumped " + str(jump) + " time steps!")
+        self.landmark = np.reshape(self.state[6:], (3, self.featureN), order='F')
+        print(self.landmark)
+        fig, ax = visualize_trajectory_2d(self.allIMUPose, landmark=self.landmark)
+
 
 
 if __name__ == "__main__":
-    filename = "./data/0034.npz"
+    filename = "./data/0027.npz"
     mySLAM = VISLAM(filename)
-    mySLAM.dataSummary()
-    mySLAM.visualMap()
+    # mySLAM.SE3HatTest()
+    mySLAM.jointEKF()
+    # mySLAM.dataSummary()
+    # mySLAM.observationTest()
+    # mySLAM.visualMap()
+    # mySLAM.cirDotMapTest()
+    # mySLAM.dpiMapTest()
     # mySLAM.getValidFeatures()
     # mySLAM.calculateIMUPose()
     # mySLAM.displayIMUPose(100)
