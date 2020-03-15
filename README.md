@@ -14,6 +14,12 @@ If we haven't seen this feature before, i.e. there is no key `fidx` in `self.fea
 
 If we have seen this feature before, we use the update rule on page 8 of lecture 13 to calculate the Jacobian `Htij` and Kalman gain `Kt`. Use the current observation `Z` and predicted observation `prevZ` to calculate the innovation and update the feature location. The results for the three datasets are as follows:
 
+![alt text](Images/Part-a+b/22.png "Dataset 22 Result")
+
+![alt text](Images/Part-a+b/27.png "Dataset 27 Result")
+
+![alt text](Images/Part-a+b/34.png "Dataset 34 Result")
+
 < img src="Images/Part-a+b/22.png" alt="alt text" style="zoom:50%;" />
 
 < img src="Images/Part-a+b/27.png" alt="alt text" style="zoom:50%;" />
@@ -34,14 +40,11 @@ We used a trick to prevent some numerical issues that may arise when we invert t
 
 We used the formula on page 19 of lecture 13 to update the inverse IMU pose as well as the feature locations. The results of each dataset are as follows:
 
-Dataset 22
-< img src="Images/Part-C/22.png" alt="alt text" style="zoom:50%;" />
+![alt text](Images/Part-C/22.png "Dataset 22 Result")
 
-Dataset 22
-< img src="Images/Part-C/27.png" alt="alt text" style="zoom:50%;" />
+![alt text](Images/Part-C/27.png "Dataset 27 Result")
 
-Dataset 22
-< img src="Images/Part-C/34.png" alt="alt text" style="zoom:50%;" />
+![alt text](Images/Part-C/34.png "Dataset 34 Result")
 
 ### Helper functions
 There are many helper functions: `hatMap()`, `CirDotMap`, `piMap`, `dpiMap` and `ObservationModel`. They helped calculate some important results of EKF update. We also wrote some test for them to ensure they are correct.
